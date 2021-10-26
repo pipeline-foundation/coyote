@@ -1,6 +1,6 @@
 {
 	"name": "devcontainer",
-	"image": "zlatkow1996/coyote-devcontainer:1.0.0",
+	"image": "microsoft/coyote-devcontainer:1.0.0",
 	"settings": {
 		"workbench.colorTheme": "Default Dark+",
 		"terminal.integrated.defaultProfile.linux": "pwsh"
