@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.Coyote.IO;
@@ -13,39 +14,14 @@ namespace Microsoft.Coyote.Rewriting
     /// <summary>
     /// Rewriting pass that fails invocations of uncontrolled types.
     /// </summary>
-    internal class UncontrolledInvocationRewriter : AssemblyRewriter
+    internal class UncontrolledInvocationRewritingPass : RewritingPass
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="UncontrolledInvocationRewriter"/> class.
+        /// Initializes a new instance of the <see cref="UncontrolledInvocationRewritingPass"/> class.
         /// </summary>
-        internal UncontrolledInvocationRewriter(ILogger log)
-            : base(log)
+        internal UncontrolledInvocationRewritingPass(IEnumerable<AssemblyInfo> visitedAssemblies, ILogger logger)
+            : base(visitedAssemblies, logger)
         {
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitType(TypeDefinition type)
-        {
-            this.Method = null;
-            this.Processor = null;
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitMethod(MethodDefinition method)
-        {
-            this.Method = null;
-
-            // Only non-abstract method bodies can be rewritten.
-            if (method.IsAbstract)
-            {
-                return;
-            }
-
-            this.Method = method;
-            this.Processor = method.Body.GetILProcessor();
-
-            // Rewrite the method body instructions.
-            this.VisitInstructions(method);
         }
 
         /// <inheritdoc/>
@@ -91,7 +67,7 @@ namespace Microsoft.Coyote.Rewriting
                     this.Processor.InsertBefore(instruction, Instruction.Create(OpCodes.Ldstr, invocationName));
                     this.Processor.InsertBefore(instruction, Instruction.Create(OpCodes.Call, providerMethod));
 
-                    this.ModifiedMethodBody = true;
+                    this.IsMethodBodyModified = true;
                 }
             }
             catch (AssemblyResolutionException)

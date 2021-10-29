@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Generic;
 using Microsoft.Coyote.Interception;
 using Microsoft.Coyote.IO;
 using Mono.Cecil;
@@ -8,30 +9,14 @@ using Mono.Cecil.Cil;
 
 namespace Microsoft.Coyote.Rewriting
 {
-    internal class DataRaceCheckingRewriter : AssemblyRewriter
+    internal class DataRaceCheckingRewritingPass : RewritingPass
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="DataRaceCheckingRewriter"/> class.
+        /// Initializes a new instance of the <see cref="DataRaceCheckingRewritingPass"/> class.
         /// </summary>
-        internal DataRaceCheckingRewriter(ILogger logger)
-            : base(logger)
+        internal DataRaceCheckingRewritingPass(IEnumerable<AssemblyInfo> visitedAssemblies, ILogger logger)
+            : base(visitedAssemblies, logger)
         {
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitMethod(MethodDefinition method)
-        {
-            this.Method = null;
-
-            // Only non-abstract method bodies can be rewritten.
-            if (!method.IsAbstract)
-            {
-                this.Method = method;
-                this.Processor = method.Body.GetILProcessor();
-
-                // Rewrite the method body instructions.
-                this.VisitInstructions(method);
-            }
         }
 
         /// <inheritdoc/>

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using System.Collections.Generic;
 using Microsoft.Coyote.Interception;
 using Microsoft.Coyote.IO;
 using Mono.Cecil;
@@ -14,7 +15,7 @@ namespace Microsoft.Coyote.Rewriting
     /// Coyote ControlledMonitor instead which allows systematic testing of code that
     /// uses monitors.
     /// </summary>
-    internal class MonitorRewriter : AssemblyRewriter
+    internal class MonitorRewritingPass : RewritingPass
     {
         /// <summary>
         /// The cached imported <see cref="ControlledMonitor"/> type.
@@ -24,10 +25,10 @@ namespace Microsoft.Coyote.Rewriting
         private const string MonitorClassName = "System.Threading.Monitor";
 
         /// <summary>
-        /// Initializes a new instance of the <see cref="MonitorRewriter"/> class.
+        /// Initializes a new instance of the <see cref="MonitorRewritingPass"/> class.
         /// </summary>
-        internal MonitorRewriter(ILogger logger)
-            : base(logger)
+        internal MonitorRewritingPass(IEnumerable<AssemblyInfo> visitedAssemblies, ILogger logger)
+            : base(visitedAssemblies, logger)
         {
         }
 
@@ -36,22 +37,6 @@ namespace Microsoft.Coyote.Rewriting
         {
             this.ControlledMonitorType = null;
             base.VisitModule(module);
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitMethod(MethodDefinition method)
-        {
-            this.Method = null;
-
-            // Only non-abstract method bodies can be rewritten.
-            if (!method.IsAbstract)
-            {
-                this.Method = method;
-                this.Processor = method.Body.GetILProcessor();
-
-                // Rewrite the method body instructions.
-                this.VisitInstructions(method);
-            }
         }
 
         /// <inheritdoc/>
