@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.Coyote.IO;
@@ -14,39 +15,14 @@ namespace Microsoft.Coyote.Rewriting
     /// <summary>
     /// Rewriting pass for invocations between assemblies.
     /// </summary>
-    internal class InterAssemblyInvocationRewriter : AssemblyRewriter
+    internal class InterAssemblyInvocationRewritingPass : RewritingPass
     {
         /// <summary>
-        /// Initializes a new instance of the <see cref="InterAssemblyInvocationRewriter"/> class.
+        /// Initializes a new instance of the <see cref="InterAssemblyInvocationRewritingPass"/> class.
         /// </summary>
-        internal InterAssemblyInvocationRewriter(ILogger log)
-            : base(log)
+        internal InterAssemblyInvocationRewritingPass(IEnumerable<AssemblyInfo> visitedAssemblies, ILogger logger)
+            : base(visitedAssemblies, logger)
         {
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitType(TypeDefinition type)
-        {
-            this.Method = null;
-            this.Processor = null;
-        }
-
-        /// <inheritdoc/>
-        internal override void VisitMethod(MethodDefinition method)
-        {
-            this.Method = null;
-
-            // Only non-abstract method bodies can be rewritten.
-            if (method.IsAbstract)
-            {
-                return;
-            }
-
-            this.Method = method;
-            this.Processor = method.Body.GetILProcessor();
-
-            // Rewrite the method body instructions.
-            this.VisitInstructions(method);
         }
 
         /// <inheritdoc/>
@@ -77,20 +53,30 @@ namespace Microsoft.Coyote.Rewriting
                         this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Ldstr, methodName));
                         this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Dup));
 
-                        this.ModifiedMethodBody = true;
+                        this.IsMethodBodyModified = true;
                     }
                     else if (methodReference.Name is "GetAwaiter" &&
                         IsTaskAwaiterType(methodReference.ReturnType.Resolve()))
                     {
-                        var declaringType = methodReference.DeclaringType;
+                        var returnType = methodReference.ReturnType;
                         TypeDefinition providerType = this.Module.ImportReference(typeof(ControlledTasks.TaskAwaiter)).Resolve();
                         MethodReference wrapMethod = null;
-                        if (declaringType is GenericInstanceType gt)
+                        if (returnType is GenericInstanceType rgt)
                         {
-                            MethodDefinition genericMethod = providerType.Methods.FirstOrDefault(m => m.Name == "Wrap" && m.HasGenericParameters);
-                            MethodReference wrapReference = this.Module.ImportReference(genericMethod);
+                            TypeReference argType;
+                            if (methodReference.DeclaringType is GenericInstanceType dgt)
+                            {
+                                var returnArgType = rgt.GenericArguments.FirstOrDefault().GetElementType();
+                                argType = GetGenericParameterTypeFromNamedIndex(dgt, returnArgType.FullName);
+                            }
+                            else
+                            {
+                                argType = rgt.GenericArguments.FirstOrDefault().GetElementType();
+                            }
 
-                            TypeReference argType = gt.GenericArguments.FirstOrDefault().GetElementType();
+                            MethodDefinition genericMethod = providerType.Methods.FirstOrDefault(
+                                m => m.Name == "Wrap" && m.HasGenericParameters);
+                            MethodReference wrapReference = this.Module.ImportReference(genericMethod);
                             wrapMethod = MakeGenericMethod(wrapReference, argType);
                         }
                         else
@@ -106,7 +92,7 @@ namespace Microsoft.Coyote.Rewriting
 
                         this.Processor.InsertAfter(instruction, newInstruction);
 
-                        this.ModifiedMethodBody = true;
+                        this.IsMethodBodyModified = true;
                     }
                 }
             }
@@ -116,25 +102,6 @@ namespace Microsoft.Coyote.Rewriting
             }
 
             return instruction;
-        }
-
-        /// <summary>
-        /// Checks if the specified type is foreign.
-        /// </summary>
-        private bool IsForeignType(TypeDefinition type)
-        {
-            if (type is null || this.Module == type.Module)
-            {
-                return false;
-            }
-
-            string module = Path.GetFileName(type.Module.FileName);
-            if (module is "Microsoft.Coyote.dll" || module is "Microsoft.Coyote.Test.dll")
-            {
-                return false;
-            }
-
-            return true;
         }
 
         /// <summary>
