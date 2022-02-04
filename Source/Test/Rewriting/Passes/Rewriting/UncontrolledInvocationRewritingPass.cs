@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using Microsoft.Coyote.IO;
 using Microsoft.Coyote.Runtime;
@@ -116,10 +115,6 @@ namespace Microsoft.Coyote.Rewriting
                     (method.Name is nameof(System.Threading.Tasks.Task.ContinueWith) ||
                     method.Name is nameof(System.Threading.Tasks.Task.Run) ||
                     method.Name is nameof(System.Threading.Tasks.Task.RunSynchronously)))
-                {
-                    return true;
-                }
-                else if (type.Name is nameof(System.Threading.Tasks.ValueTask))
                 {
                     return true;
                 }

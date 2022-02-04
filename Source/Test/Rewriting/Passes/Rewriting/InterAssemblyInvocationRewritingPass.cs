@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Coyote.IO;
@@ -41,7 +42,7 @@ namespace Microsoft.Coyote.Rewriting
                 if (IsTaskType(resolvedReturnType, NameCache.TaskName, NameCache.SystemTasksNamespace))
                 {
                     string methodName = GetFullyQualifiedMethodName(methodReference);
-                    Debug.WriteLine($"............. [+] injected returned uncontrolled task assertion for method '{methodName}'");
+                    Debug.WriteLine($"............. [+] returned uncontrolled task assertion for method '{methodName}'");
 
                     var providerType = this.Module.ImportReference(typeof(ExceptionProvider)).Resolve();
                     MethodReference providerMethod = providerType.Methods.FirstOrDefault(
@@ -51,51 +52,83 @@ namespace Microsoft.Coyote.Rewriting
                     this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Call, providerMethod));
                     this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Ldstr, methodName));
                     this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Dup));
+                    this.IsMethodBodyModified = true;
+                }
+                else if (IsTaskType(resolvedReturnType, NameCache.ValueTaskName, NameCache.SystemTasksNamespace))
+                {
+                    string methodName = GetFullyQualifiedMethodName(methodReference);
+                    Debug.WriteLine($"............. [+] returned uncontrolled value task assertion for method '{methodName}'");
 
+                    var providerType = this.Module.ImportReference(typeof(ExceptionProvider)).Resolve();
+                    MethodReference providerMethod = providerType.Methods.FirstOrDefault(
+                        m => m.Name is nameof(ExceptionProvider.ThrowIfReturnedValueTaskNotControlled));
+                    providerMethod = this.Module.ImportReference(providerMethod);
+
+                    this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Call, providerMethod));
+                    this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Ldstr, methodName));
+                    this.Processor.InsertAfter(instruction, Instruction.Create(OpCodes.Dup));
                     this.IsMethodBodyModified = true;
                 }
                 else if (methodReference.Name is "GetAwaiter" && IsTaskType(resolvedReturnType,
                     NameCache.TaskAwaiterName, NameCache.SystemCompilerNamespace))
                 {
-                    var returnType = methodReference.ReturnType;
-                    TypeDefinition providerType = this.Module.ImportReference(typeof(RuntimeCompiler.TaskAwaiter)).Resolve();
-                    MethodReference wrapMethod = null;
-                    if (returnType is GenericInstanceType rgt)
-                    {
-                        TypeReference argType;
-                        if (methodReference.DeclaringType is GenericInstanceType dgt)
-                        {
-                            var returnArgType = rgt.GenericArguments.FirstOrDefault().GetElementType();
-                            argType = GetGenericParameterTypeFromNamedIndex(dgt, returnArgType.FullName);
-                        }
-                        else
-                        {
-                            argType = rgt.GenericArguments.FirstOrDefault().GetElementType();
-                        }
-
-                        MethodDefinition genericMethod = providerType.Methods.FirstOrDefault(
-                            m => m.Name == "Wrap" && m.HasGenericParameters);
-                        MethodReference wrapReference = this.Module.ImportReference(genericMethod);
-                        wrapMethod = MakeGenericMethod(wrapReference, argType);
-                    }
-                    else
-                    {
-                        wrapMethod = providerType.Methods.FirstOrDefault(
-                        m => m.Name is nameof(RuntimeCompiler.TaskAwaiter.Wrap));
-                    }
-
-                    wrapMethod = this.Module.ImportReference(wrapMethod);
-
+                    MethodReference wrapMethod = this.CreateTaskAwaiterWrapMethod(
+                        typeof(RuntimeCompiler.TaskAwaiter), methodReference);
                     Instruction newInstruction = Instruction.Create(OpCodes.Call, wrapMethod);
                     Debug.WriteLine($"............. [+] {newInstruction}");
 
                     this.Processor.InsertAfter(instruction, newInstruction);
+                    this.IsMethodBodyModified = true;
+                }
+                else if (methodReference.Name is "GetAwaiter" && IsTaskType(resolvedReturnType,
+                    NameCache.ValueTaskAwaiterName, NameCache.SystemCompilerNamespace))
+                {
+                    MethodReference wrapMethod = this.CreateTaskAwaiterWrapMethod(
+                        typeof(RuntimeCompiler.ValueTaskAwaiter), methodReference);
+                    Instruction newInstruction = Instruction.Create(OpCodes.Call, wrapMethod);
+                    Debug.WriteLine($"............. [+] {newInstruction}");
 
+                    this.Processor.InsertAfter(instruction, newInstruction);
                     this.IsMethodBodyModified = true;
                 }
             }
 
             return instruction;
+        }
+
+        /// <summary>
+        /// Creates a wrap method of the specified task awaiter type.
+        /// </summary>
+        private MethodReference CreateTaskAwaiterWrapMethod(Type type, MethodReference methodReference)
+        {
+            var returnType = methodReference.ReturnType;
+            TypeDefinition providerType = this.Module.ImportReference(type).Resolve();
+            MethodReference wrapMethod = null;
+            if (returnType is GenericInstanceType rgt)
+            {
+                TypeReference argType;
+                if (methodReference.DeclaringType is GenericInstanceType dgt)
+                {
+                    var returnArgType = rgt.GenericArguments.FirstOrDefault().GetElementType();
+                    argType = GetGenericParameterTypeFromNamedIndex(dgt, returnArgType.FullName);
+                }
+                else
+                {
+                    argType = rgt.GenericArguments.FirstOrDefault().GetElementType();
+                }
+
+                MethodDefinition genericMethod = providerType.Methods.FirstOrDefault(
+                    m => m.Name == "Wrap" && m.HasGenericParameters);
+                MethodReference wrapReference = this.Module.ImportReference(genericMethod);
+                wrapMethod = MakeGenericMethod(wrapReference, argType);
+            }
+            else
+            {
+                wrapMethod = providerType.Methods.FirstOrDefault(
+                m => m.Name is nameof(RuntimeCompiler.TaskAwaiter.Wrap));
+            }
+
+            return this.Module.ImportReference(wrapMethod);
         }
 
         /// <summary>
