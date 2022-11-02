@@ -518,7 +518,7 @@ namespace Microsoft.Coyote.Runtime
                 }
 
                 // TODO: cache the dummy delay action to optimize memory.
-                ControlledOperation op = this.CreateControlledOperation(timeout);
+                ControlledOperation op = this.CreateControlledOperation(delay: timeout);
                 return this.TaskFactory.StartNew(state =>
                 {
                     var delayedOp = state as ControlledOperation;
@@ -583,16 +583,16 @@ namespace Microsoft.Coyote.Runtime
         }
 
         /// <summary>
-        /// Creates a new controlled operation with an optional delay.
+        /// Creates a new controlled operation with the specified group and an optional delay.
         /// </summary>
-        internal ControlledOperation CreateControlledOperation(uint delay = 0)
+        internal ControlledOperation CreateControlledOperation(OperationGroup group = null, uint delay = 0)
         {
             using (SynchronizedSection.Enter(this.RuntimeLock))
             {
                 // Assign the operation group associated with the execution context of the
                 // current thread, if such a group exists, else the group of the currently
                 // executing operation, if such an operation exists.
-                OperationGroup group = OperationGroup.Current ?? ExecutingOperation.Value?.Group;
+                // OperationGroup group = OperationGroup.Current ?? ExecutingOperation.Value?.Group;
 
                 // Create a new controlled operation using the next available operation id.
                 ulong operationId = this.GetNextOperationId();
@@ -818,10 +818,12 @@ namespace Microsoft.Coyote.Runtime
         /// <param name="type">The type of the scheduling point.</param>
         /// <param name="isSuppressible">True if the interleaving can be suppressed, else false.</param>
         /// <param name="isYielding">True if the current operation is yielding, else false.</param>
+        /// <returns>True if an operation other than the current was scheduled, else false.</returns>
         /// <remarks>
         /// An enabled operation is one that is not paused nor completed.
         /// </remarks>
-        internal void ScheduleNextOperation(ControlledOperation current, SchedulingPointType type, bool isSuppressible = true, bool isYielding = false)
+        internal bool ScheduleNextOperation(ControlledOperation current, SchedulingPointType type,
+            bool isSuppressible = true, bool isYielding = false)
         {
             using (SynchronizedSection.Enter(this.RuntimeLock))
             {
@@ -832,7 +834,7 @@ namespace Microsoft.Coyote.Runtime
                 {
                     // Cannot schedule the next operation if the scheduler is not attached,
                     // or if the scheduling policy is not systematic.
-                    return;
+                    return false;
                 }
 
                 // Check if the currently executing thread is uncontrolled.
@@ -857,7 +859,7 @@ namespace Microsoft.Coyote.Runtime
                         this.LogWriter.LogDebug("[coyote::debug] Postponing scheduling point '{0}' in uncontrolled thread '{1}'.",
                             type, Thread.CurrentThread.ManagedThreadId);
                         this.LastPostponedSchedulingPoint = type;
-                        return;
+                        return false;
                     }
 
                     isThreadUncontrolled = true;
@@ -869,14 +871,14 @@ namespace Microsoft.Coyote.Runtime
                 if (current is null)
                 {
                     // Cannot proceed without having access to the currently executing operation.
-                    return;
+                    return false;
                 }
 
                 if (current != this.ScheduledOperation)
                 {
                     // The currently executing operation is not scheduled, so send it to sleep.
                     this.PauseOperation(current);
-                    return;
+                    return false;
                 }
 
                 if (this.IsSchedulerSuppressed && this.LastPostponedSchedulingPoint is null &&
@@ -884,7 +886,7 @@ namespace Microsoft.Coyote.Runtime
                 {
                     // Suppress the scheduling point.
                     this.LogWriter.LogDebug("[coyote::debug] Suppressing scheduling point in operation '{0}'.", current.Name);
-                    return;
+                    return false;
                 }
 
                 this.Assert(!this.IsSpecificationInvoked, "Executing a specification monitor must be atomic.");
@@ -918,7 +920,7 @@ namespace Microsoft.Coyote.Runtime
                             type, current);
                         this.LastPostponedSchedulingPoint = type;
                         this.PauseOperation(current);
-                        return;
+                        return false;
                     }
 
                     // Check if the execution has deadlocked.
@@ -939,7 +941,8 @@ namespace Microsoft.Coyote.Runtime
 
                 this.LogWriter.LogDebug("[coyote::debug] Scheduling operation '{0}' of group '{1}'.",
                     next.Name, next.Group);
-                if (current != next)
+                bool isNextOperationScheduled = current != next;
+                if (isNextOperationScheduled)
                 {
                     // Pause the currently scheduled operation, and enable the next one.
                     this.ScheduledOperation = next;
@@ -952,6 +955,8 @@ namespace Microsoft.Coyote.Runtime
                     // is uncontrolled, then we need to signal the current operation to resume execution.
                     next.Signal();
                 }
+
+                return isNextOperationScheduled;
             }
         }
 
@@ -1864,26 +1869,34 @@ namespace Microsoft.Coyote.Runtime
                         if (info.OperationCount == this.OperationMap.Count &&
                             info.StepCount == this.Scheduler.StepCount)
                         {
-                            string msg = "Potential deadlock detected. The periodic deadlock detection monitor was used, " +
-                                "so Coyote cannot accurately determine if this is a real deadlock or not. If you believe " +
-                                "that this is not a real deadlock, you can try increase the deadlock detection timeout " +
-                                "by setting '--deadlock-timeout N' or 'Configuration.WithDeadlockTimeout(N)'.";
-                            if (this.Configuration.ReportPotentialDeadlocksAsBugs)
+                            string msg = "Potential deadlock or hang detected. The periodic deadlock detection monitor was used, so " +
+                                "Coyote cannot accurately determine if this is a deadlock, hang or false positive. If you believe " +
+                                "that this is a false positive, you can try increase the deadlock detection timeout by setting " +
+                                "'--deadlock-timeout N' or 'Configuration.WithDeadlockTimeout(N)'.";
+                            if (Debugger.IsAttached)
                             {
-                                msg += " Alternatively, you can disable reporting potential deadlocks as bugs by setting " +
-                                "'--skip-potential-deadlocks' or 'Configuration.WithPotentialDeadlocksReportedAsBugs(false)'.";
+                                msg += " The deadlock or hang was detected with a debugger attached, so Coyote is only inserting " +
+                                    "a breakpoint, instead of failing this execution.";
+                                this.LogWriter.LogError("[coyote::error] {0}", msg);
+                                Debugger.Break();
+                            }
+                            else if (this.Configuration.ReportPotentialDeadlocksAsBugs)
+                            {
+                                msg += " Alternatively, you can disable reporting potential deadlocks or hangs as bugs by setting " +
+                                    "'--skip-potential-deadlocks' or 'Configuration.WithPotentialDeadlocksReportedAsBugs(false)'.";
                                 this.NotifyAssertionFailure(msg);
                             }
                             else
                             {
-                                this.LogWriter.LogInfo("[coyote::test] {0}", msg);
+                                this.LogWriter.LogError("[coyote::error] {0}", msg);
                                 this.Detach(ExecutionStatus.Deadlocked);
                             }
                         }
                         else
                         {
                             // Passed check, so continue with the next timeout period.
-                            this.LogWriter.LogDebug("[coyote::debug] Passed periodic check for potential deadlocks in runtime '{0}'.", this.Id);
+                            this.LogWriter.LogDebug("[coyote::debug] Passed periodic check for potential deadlocks and hangs in runtime '{0}'.",
+                                this.Id);
                             info.OperationCount = this.OperationMap.Count;
                             info.StepCount = this.Scheduler.StepCount;
                             if (this.LastPostponedSchedulingPoint is SchedulingPointType.Pause ||
@@ -2011,7 +2024,7 @@ namespace Microsoft.Coyote.Runtime
                     this.BugReport = text;
                     this.LogManager.LogAssertionFailure($"[coyote::error] {text}");
                     this.RaiseOnFailureEvent(new AssertionFailureException(text));
-                    if (this.Configuration.AttachDebugger)
+                    if (Debugger.IsAttached)
                     {
                         Debugger.Break();
                     }
@@ -2228,10 +2241,9 @@ namespace Microsoft.Coyote.Runtime
         /// </summary>
         internal void RaiseOnFailureEvent(Exception exception)
         {
-            if (this.Configuration.AttachDebugger)
+            if (Debugger.IsAttached)
             {
                 Debugger.Break();
-                this.Configuration.AttachDebugger = false;
             }
 
             this.OnFailure?.Invoke(exception);
