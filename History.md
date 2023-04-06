@@ -1,3 +1,11 @@
+## v1.7.6
+- Exposed the `ConsoleLogger` as public so that users can conveniently use it to write runtime logs
+  to the console.
+- Implemented more fake methods in the `ActorTestKit` class.
+- Added a method for setting a custom logger when using the `ActorTestKit` class.
+- Added rewriting support for `System.Threading.Volatile` methods.
+- Fixed a bug where merging coverage info could result in a rare race condition.
+
 ## v1.7.5
 - Added support for controlling user-created `Thread` instances during testing.
 - Added support for controlling `WaitHandle` and related APIs during testing.
